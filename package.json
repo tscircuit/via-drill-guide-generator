@@ -7,14 +7,35 @@
     "lib"
   ],
   "scripts": {
+    "build": "vite build",
+    "dev": "vite --host 0.0.0.0",
     "format": "biome format --write .",
     "format:check": "biome format .",
+    "start": "vite --host 0.0.0.0",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@tscircuit/alphabet": "^0.0.25",
+    "@tscircuit/circuit-json-util": "^0.0.94",
+    "circuit-to-svg": "^0.0.345",
+    "circuit-json": "^0.0.422",
+    "circuit-json-to-connectivity-map": "^0.0.23",
+    "jszip": "^3.10.1",
+    "lucide-react": "^1.14.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "schematic-symbols": "^0.0.224",
+    "three": "^0.184.0"
+  },
   "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.184.0",
     "@biomejs/biome": "^2.4.4",
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@vitejs/plugin-react": "^4.7.0",
+    "vite": "^6.4.2"
   },
   "peerDependencies": {
     "typescript": "^5"
