@@ -141,7 +141,7 @@ export const App = () => {
       <section className="metrics" aria-label="Guide measurements">
         <Metric label="Status" value={status} />
         <Metric label="Base" value={formatBase(guide?.stats)} />
-        <Metric label="Pillars" value="4 x 2.3 mm" />
+        <Metric label="Pillars" value="4 x 1 mm" />
         <Metric
           label="Drill Holes"
           value={String(guide?.stats.holes.length ?? 0)}

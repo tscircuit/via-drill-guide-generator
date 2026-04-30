@@ -25,7 +25,7 @@ export interface DrillGuideOptions {
 
 export interface DrillHole {
   id: string
-  type: "pcb_hole" | "pcb_via"
+  type: "pcb_hole" | "pcb_plated_hole" | "pcb_via"
   x: number
   y: number
   diameterMm: number
@@ -51,7 +51,7 @@ const defaultOptions = {
   baseWidthMm: 100,
   baseHeightMm: 70,
   baseThicknessMm: 3,
-  pillarDiameterMm: 2.3,
+  pillarDiameterMm: 1,
   pillarHeightMm: 3,
   pillarCenterInsetMm: 6,
   holeSegments: 48,
@@ -82,7 +82,13 @@ export const extractDrillHoles = (circuitJson: unknown[]): DrillHole[] => {
   const holes: DrillHole[] = []
 
   for (const element of circuitJson as CircuitElement[]) {
-    if (element.type !== "pcb_hole" && element.type !== "pcb_via") continue
+    if (
+      element.type !== "pcb_hole" &&
+      element.type !== "pcb_plated_hole" &&
+      element.type !== "pcb_via"
+    ) {
+      continue
+    }
 
     const x = readNumber(element.x) ?? readNestedNumber(element, "center", "x")
     const y = readNumber(element.y) ?? readNestedNumber(element, "center", "y")
@@ -99,6 +105,7 @@ export const extractDrillHoles = (circuitJson: unknown[]): DrillHole[] => {
     holes.push({
       id:
         readString(element.pcb_hole_id) ??
+        readString(element.pcb_plated_hole_id) ??
         readString(element.pcb_via_id) ??
         `${element.type}_${holes.length}`,
       type: element.type,
