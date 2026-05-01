@@ -1,4 +1,5 @@
 import JSZip from "jszip"
+import { getManifoldModule, setWasmUrl } from "manifold-3d/lib/wasm.js"
 import {
   BufferGeometry,
   CylinderGeometry,
@@ -51,8 +52,8 @@ const defaultOptions = {
   baseWidthMm: 100,
   baseHeightMm: 70,
   baseThicknessMm: 3,
-  pillarDiameterMm: 1,
-  pillarHeightMm: 3,
+  pillarDiameterMm: 2.2,
+  pillarHeightMm: 1,
   pillarCenterInsetMm: 6,
   holeSegments: 48,
 } satisfies Required<DrillGuideOptions>
@@ -70,6 +71,8 @@ const pillarMaterial = new MeshStandardMaterial({
   metalness: 0.08,
   side: DoubleSide,
 })
+
+let didConfigureManifoldWasm = false
 
 export const getDrillGuideOptions = (
   options: DrillGuideOptions = {},
@@ -167,11 +170,7 @@ export const createDrillGuide3MfBlob = async (
   circuitJson: unknown[],
   options: DrillGuideOptions = {},
 ): Promise<Blob> => {
-  const { group } = createDrillGuide(circuitJson, options)
-  group.rotation.set(0, 0, 0)
-  group.updateMatrixWorld(true)
-
-  const meshData = collectMeshData(group)
+  const meshData = await createSingleBodyMeshData(circuitJson, options)
   const modelXml = createModelXml(meshData)
   const zip = new JSZip()
   zip.file("[Content_Types].xml", createContentTypesXml())
@@ -185,7 +184,66 @@ export const createDrillGuide3MfBlob = async (
   })
 }
 
+export const createSingleBodyMeshData = async (
+  circuitJson: unknown[],
+  options: DrillGuideOptions = {},
+): Promise<MeshData> => {
+  const resolvedOptions = getDrillGuideOptions(options)
+  const holes = extractDrillHoles(circuitJson).filter((hole) =>
+    isHoleInsideBase(hole, resolvedOptions),
+  )
+  const { Manifold } = await getConfiguredManifoldModule()
+  const base = Manifold.cube(
+    [
+      resolvedOptions.baseWidthMm,
+      resolvedOptions.baseHeightMm,
+      resolvedOptions.baseThicknessMm,
+    ],
+    true,
+  ).translate(0, 0, resolvedOptions.baseThicknessMm / 2)
+  const holeCutters = holes.map((hole) =>
+    Manifold.cylinder(
+      resolvedOptions.baseThicknessMm + 2,
+      hole.diameterMm / 2,
+      hole.diameterMm / 2,
+      resolvedOptions.holeSegments,
+      true,
+    ).translate(hole.x, hole.y, resolvedOptions.baseThicknessMm / 2),
+  )
+  const drilledBase =
+    holeCutters.length > 0 ? Manifold.difference([base, ...holeCutters]) : base
+  const pillarOverlapMm = 0.05
+  const pillars = getPillarPositions(resolvedOptions).map((position) =>
+    Manifold.cylinder(
+      resolvedOptions.pillarHeightMm + pillarOverlapMm,
+      resolvedOptions.pillarDiameterMm / 2,
+      resolvedOptions.pillarDiameterMm / 2,
+      48,
+      false,
+    ).translate(position.x, position.y, -resolvedOptions.pillarHeightMm),
+  )
+  const solid = Manifold.union([drilledBase, ...pillars])
+  const parts = solid.decompose()
+
+  if (parts.length !== 1) {
+    throw new Error(`Expected one manifold body, got ${parts.length}`)
+  }
+
+  return manifoldMeshToMeshData(solid.getMesh())
+}
+
 export const generateViaDrillGuide = extractDrillHoles
+
+const getConfiguredManifoldModule = async () => {
+  if (!didConfigureManifoldWasm) {
+    if (typeof window !== "undefined") {
+      setWasmUrl("/manifold.wasm")
+    }
+    didConfigureManifoldWasm = true
+  }
+
+  return await getManifoldModule()
+}
 
 const readNumber = (value: unknown): number | undefined =>
   typeof value === "number" ? value : undefined
@@ -294,9 +352,15 @@ const countGroupTriangles = (group: Group): number => {
   return triangleCount
 }
 
-interface MeshData {
+export interface MeshData {
   vertices: Array<[number, number, number]>
   triangles: Array<[number, number, number]>
+}
+
+interface ManifoldMeshData {
+  numProp: number
+  vertProperties: Float32Array
+  triVerts: Uint32Array
 }
 
 const collectMeshData = (root: Object3D): MeshData => {
@@ -353,6 +417,33 @@ const round = (value: number): number => Number(value.toFixed(5))
 
 const toNonIndexedGeometry = (geometry: BufferGeometry): BufferGeometry =>
   geometry.index ? geometry.toNonIndexed() : geometry
+
+const manifoldMeshToMeshData = (mesh: ManifoldMeshData): MeshData => {
+  const vertices: Array<[number, number, number]> = []
+  const triangles: Array<[number, number, number]> = []
+
+  for (
+    let index = 0;
+    index < mesh.vertProperties.length;
+    index += mesh.numProp
+  ) {
+    vertices.push([
+      round(mesh.vertProperties[index] ?? 0),
+      round(mesh.vertProperties[index + 1] ?? 0),
+      round(mesh.vertProperties[index + 2] ?? 0),
+    ])
+  }
+
+  for (let index = 0; index < mesh.triVerts.length; index += 3) {
+    triangles.push([
+      mesh.triVerts[index] ?? 0,
+      mesh.triVerts[index + 1] ?? 0,
+      mesh.triVerts[index + 2] ?? 0,
+    ])
+  }
+
+  return { vertices, triangles }
+}
 
 const createModelXml = ({ vertices, triangles }: MeshData): string => {
   const vertexXml = vertices
