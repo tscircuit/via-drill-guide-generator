@@ -53,7 +53,7 @@ const defaultOptions = {
   baseHeightMm: 70,
   baseThicknessMm: 3,
   pillarDiameterMm: 2.2,
-  pillarHeightMm: 1,
+  pillarHeightMm: 1.6,
   pillarCenterInsetMm: 6,
   holeSegments: 48,
 } satisfies Required<DrillGuideOptions>

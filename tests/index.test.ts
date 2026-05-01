@@ -80,7 +80,7 @@ test("builds the requested base with four bottom pillars", () => {
   expect(guide.stats.baseThicknessMm).toBe(3)
   expect(guide.stats.pillarCount).toBe(4)
   expect(options.pillarDiameterMm).toBe(2.2)
-  expect(options.pillarHeightMm).toBe(1)
+  expect(options.pillarHeightMm).toBe(1.6)
   expect(options.pillarCenterInsetMm).toBe(6)
   expect(guide.stats.holes).toHaveLength(1)
   expect(guide.stats.triangleCount).toBeGreaterThan(0)
@@ -99,6 +99,8 @@ test("exports a single manifold body mesh for 3mf", async () => {
 
   expect(meshData.vertices.length).toBeGreaterThan(0)
   expect(meshData.triangles.length).toBeGreaterThan(0)
+  expect(Math.min(...meshData.vertices.map((vertex) => vertex[2]))).toBe(-1.6)
+  expect(Math.max(...meshData.vertices.map((vertex) => vertex[2]))).toBe(3)
 
   const blob = await createDrillGuide3MfBlob(circuitJson)
   const zip = await JSZip.loadAsync(await blob.arrayBuffer())
