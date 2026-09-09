@@ -64,6 +64,112 @@ test("extracts drill holes from vias, pcb holes, and plated holes", () => {
   ])
 })
 
+test("extracts pill, oval, and rect drills that only have hole_width/height", () => {
+  const holes = extractDrillHoles([
+    {
+      type: "pcb_plated_hole",
+      pcb_plated_hole_id: "usb_slot",
+      shape: "pill",
+      x: 5,
+      y: -4,
+      hole_width: 3.2,
+      hole_height: 1.1,
+      outer_width: 4,
+      outer_height: 1.8,
+      ccw_rotation: 90,
+    },
+    {
+      type: "pcb_hole",
+      pcb_hole_id: "oval_slot",
+      hole_shape: "oval",
+      x: -6,
+      y: 2,
+      hole_width: 2.4,
+      hole_height: 1.2,
+    },
+    {
+      type: "pcb_hole",
+      pcb_hole_id: "rect_cutout",
+      hole_shape: "rect",
+      x: 8,
+      y: 8,
+      hole_width: 2,
+      hole_height: 1.5,
+    },
+    {
+      type: "pcb_plated_hole",
+      pcb_plated_hole_id: "offset_circle",
+      shape: "circular_hole_with_rect_pad",
+      x: 1,
+      y: 1,
+      hole_diameter: 0.8,
+      hole_offset_x: 0.2,
+      hole_offset_y: -0.1,
+    },
+  ])
+
+  expect(holes).toEqual([
+    {
+      id: "usb_slot",
+      type: "pcb_plated_hole",
+      x: 5,
+      y: -4,
+      diameterMm: 1.1,
+      widthMm: 3.2,
+      heightMm: 1.1,
+      holeShape: "pill",
+      rotationDeg: 90,
+    },
+    {
+      id: "oval_slot",
+      type: "pcb_hole",
+      x: -6,
+      y: 2,
+      diameterMm: 1.2,
+      widthMm: 2.4,
+      heightMm: 1.2,
+      holeShape: "oval",
+    },
+    {
+      id: "rect_cutout",
+      type: "pcb_hole",
+      x: 8,
+      y: 8,
+      diameterMm: 1.5,
+      widthMm: 2,
+      heightMm: 1.5,
+      holeShape: "rect",
+    },
+    {
+      id: "offset_circle",
+      type: "pcb_plated_hole",
+      x: 1.2,
+      y: 0.9,
+      diameterMm: 0.8,
+    },
+  ])
+})
+
+test("cuts a pill plated hole as a single manifold body", async () => {
+  const circuitJson = [
+    {
+      type: "pcb_plated_hole",
+      pcb_plated_hole_id: "usb_slot",
+      shape: "pill",
+      x: 0,
+      y: 0,
+      hole_width: 3.2,
+      hole_height: 1.1,
+    },
+  ]
+  const meshData = await createSingleBodyMeshData(circuitJson)
+
+  expect(meshData.vertices.length).toBeGreaterThan(0)
+  expect(meshData.triangles.length).toBeGreaterThan(0)
+  expect(Math.min(...meshData.vertices.map((vertex) => vertex[2]))).toBe(-1.6)
+  expect(Math.max(...meshData.vertices.map((vertex) => vertex[2]))).toBe(3)
+})
+
 test("builds the requested base with four bottom pillars", () => {
   const guide = createDrillGuide([
     {
