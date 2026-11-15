@@ -12,7 +12,9 @@
       "!**/cosmos-export",
       "!**/dist",
       "!**/package.json",
-      "!public/sample-circuit.json"
+      "!public/sample-circuit.json",
+      "!**/*.md",
+      "!**/.github/**"
     ]
   },
   "javascript": {

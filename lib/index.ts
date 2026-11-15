@@ -24,12 +24,19 @@ export interface DrillGuideOptions {
   holeSegments?: number
 }
 
+export type DrillHoleShape = "circle" | "oval" | "pill" | "rect"
+
 export interface DrillHole {
   id: string
   type: "pcb_hole" | "pcb_plated_hole" | "pcb_via"
   x: number
   y: number
   diameterMm: number
+  /** Present for oval, pill, and rectangular drills; omitted for circles. */
+  widthMm?: number
+  heightMm?: number
+  rotationDeg?: number
+  holeShape?: DrillHoleShape
 }
 
 export interface DrillGuideStats {
@@ -81,6 +88,76 @@ export const getDrillGuideOptions = (
   ...options,
 })
 
+const resolveDrillHoleShape = (
+  declared: string | undefined,
+  widthMm: number,
+  heightMm: number,
+): DrillHoleShape => {
+  if (
+    declared === "pill" ||
+    declared === "rotated_pill" ||
+    declared === "pill_hole_with_rect_pad" ||
+    declared === "rotated_pill_hole_with_rect_pad"
+  ) {
+    return "pill"
+  }
+  if (declared === "oval") return "oval"
+  if (declared === "rect" || declared === "square") return "rect"
+  return Math.abs(widthMm - heightMm) < 1e-9 ? "circle" : "pill"
+}
+
+const readHoleGeometry = (
+  element: CircuitElement,
+): {
+  diameterMm: number
+  widthMm: number
+  heightMm: number
+  holeShape: DrillHoleShape
+  rotationDeg: number
+} | null => {
+  const holeWidth = readNumber(element.hole_width)
+  const holeHeight = readNumber(element.hole_height)
+  const radius = readNumber(element.radius)
+  const holeDiameter =
+    readNumber(element.hole_diameter) ??
+    readNumber(element.diameter) ??
+    readNumber(element.drill_diameter) ??
+    (radius === undefined ? undefined : radius * 2)
+  const declared = readString(element.hole_shape) ?? readString(element.shape)
+  const rotationDeg =
+    readNumber(element.hole_ccw_rotation) ??
+    readNumber(element.ccw_rotation) ??
+    0
+
+  if (
+    holeWidth !== undefined &&
+    holeHeight !== undefined &&
+    holeWidth > 0 &&
+    holeHeight > 0
+  ) {
+    const holeShape = resolveDrillHoleShape(declared, holeWidth, holeHeight)
+    return {
+      diameterMm: Math.min(holeWidth, holeHeight),
+      widthMm: holeWidth,
+      heightMm: holeHeight,
+      holeShape,
+      rotationDeg,
+    }
+  }
+
+  if (holeDiameter !== undefined && holeDiameter > 0) {
+    return {
+      diameterMm: holeDiameter,
+      widthMm: holeDiameter,
+      heightMm: holeDiameter,
+      holeShape: "circle",
+      rotationDeg,
+    }
+  }
+
+  return null
+}
+
 export const extractDrillHoles = (circuitJson: unknown[]): DrillHole[] => {
   const holes: DrillHole[] = []
 
@@ -93,29 +170,35 @@ export const extractDrillHoles = (circuitJson: unknown[]): DrillHole[] => {
       continue
     }
 
+    const geometry = readHoleGeometry(element)
     const x = readNumber(element.x) ?? readNestedNumber(element, "center", "x")
     const y = readNumber(element.y) ?? readNestedNumber(element, "center", "y")
-    const radius = readNumber(element.radius)
-    const diameterMm =
-      readNumber(element.hole_diameter) ??
-      readNumber(element.diameter) ??
-      readNumber(element.drill_diameter) ??
-      (radius === undefined ? undefined : radius * 2)
 
-    if (x === undefined || y === undefined || diameterMm === undefined) continue
-    if (!Number.isFinite(x) || !Number.isFinite(y) || diameterMm <= 0) continue
+    if (x === undefined || y === undefined || !geometry) continue
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue
 
-    holes.push({
+    const hole: DrillHole = {
       id:
         readString(element.pcb_hole_id) ??
         readString(element.pcb_plated_hole_id) ??
         readString(element.pcb_via_id) ??
         `${element.type}_${holes.length}`,
       type: element.type,
-      x,
-      y,
-      diameterMm,
-    })
+      x: x + (readNumber(element.hole_offset_x) ?? 0),
+      y: y + (readNumber(element.hole_offset_y) ?? 0),
+      diameterMm: geometry.diameterMm,
+    }
+
+    if (geometry.holeShape !== "circle") {
+      hole.widthMm = geometry.widthMm
+      hole.heightMm = geometry.heightMm
+      hole.holeShape = geometry.holeShape
+      if (geometry.rotationDeg !== 0) {
+        hole.rotationDeg = geometry.rotationDeg
+      }
+    }
+
+    holes.push(hole)
   }
 
   return holes
@@ -202,13 +285,7 @@ export const createSingleBodyMeshData = async (
     true,
   ).translate(0, 0, resolvedOptions.baseThicknessMm / 2)
   const holeCutters = holes.map((hole) =>
-    Manifold.cylinder(
-      resolvedOptions.baseThicknessMm + 2,
-      hole.diameterMm / 2,
-      hole.diameterMm / 2,
-      resolvedOptions.holeSegments,
-      true,
-    ).translate(hole.x, hole.y, resolvedOptions.baseThicknessMm / 2),
+    createManifoldHoleCutter(Manifold, hole, resolvedOptions),
   )
   const drilledBase =
     holeCutters.length > 0 ? Manifold.difference([base, ...holeCutters]) : base
@@ -261,11 +338,183 @@ const readNestedNumber = (
   return readNumber((child as CircuitElement)[numberKey])
 }
 
+const rotateLocalPoint = (
+  x: number,
+  y: number,
+  originX: number,
+  originY: number,
+  rotationDeg: number,
+): { x: number; y: number } => {
+  if (rotationDeg === 0) return { x: originX + x, y: originY + y }
+  const radians = (rotationDeg * Math.PI) / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  return {
+    x: originX + x * cos - y * sin,
+    y: originY + x * sin + y * cos,
+  }
+}
+
+const sampleHoleOutline = (
+  hole: DrillHole,
+  segments: number,
+): Array<{ x: number; y: number }> => {
+  const width = hole.widthMm ?? hole.diameterMm
+  const height = hole.heightMm ?? hole.diameterMm
+  const shape = hole.holeShape ?? "circle"
+  const rotationDeg = hole.rotationDeg ?? 0
+  const points: Array<{ x: number; y: number }> = []
+  const push = (lx: number, ly: number) => {
+    points.push(rotateLocalPoint(lx, ly, hole.x, hole.y, rotationDeg))
+  }
+
+  if (shape === "rect") {
+    push(-width / 2, -height / 2)
+    push(width / 2, -height / 2)
+    push(width / 2, height / 2)
+    push(-width / 2, height / 2)
+    return points
+  }
+
+  if (shape === "pill") {
+    const capSegments = Math.max(8, Math.floor(segments / 2))
+    if (width >= height) {
+      const radius = height / 2
+      const offsetX = width / 2 - radius
+      for (let i = 0; i <= capSegments; i++) {
+        const angle = -Math.PI / 2 + (Math.PI * i) / capSegments
+        push(offsetX + radius * Math.cos(angle), radius * Math.sin(angle))
+      }
+      for (let i = 0; i <= capSegments; i++) {
+        const angle = Math.PI / 2 + (Math.PI * i) / capSegments
+        push(-offsetX + radius * Math.cos(angle), radius * Math.sin(angle))
+      }
+      return points
+    }
+
+    const radius = width / 2
+    const offsetY = height / 2 - radius
+    for (let i = 0; i <= capSegments; i++) {
+      const angle = (Math.PI * i) / capSegments
+      push(radius * Math.cos(angle), offsetY + radius * Math.sin(angle))
+    }
+    for (let i = 0; i <= capSegments; i++) {
+      const angle = Math.PI + (Math.PI * i) / capSegments
+      push(radius * Math.cos(angle), -offsetY + radius * Math.sin(angle))
+    }
+    return points
+  }
+
+  const radiusX = width / 2
+  const radiusY = height / 2
+  for (let i = 0; i < segments; i++) {
+    const angle = (2 * Math.PI * i) / segments
+    push(radiusX * Math.cos(angle), radiusY * Math.sin(angle))
+  }
+  return points
+}
+
+const appendHoleOutline = (
+  path: Path,
+  hole: DrillHole,
+  segments: number,
+): void => {
+  if (
+    (hole.holeShape ?? "circle") === "circle" &&
+    (hole.rotationDeg ?? 0) === 0
+  ) {
+    path.absellipse(
+      hole.x,
+      hole.y,
+      hole.diameterMm / 2,
+      hole.diameterMm / 2,
+      0,
+      Math.PI * 2,
+      true,
+    )
+    return
+  }
+
+  const outline = sampleHoleOutline(hole, segments)
+  const first = outline[0]
+  if (!first) return
+  path.moveTo(first.x, first.y)
+  for (let i = 1; i < outline.length; i++) {
+    const point = outline[i]
+    if (!point) continue
+    path.lineTo(point.x, point.y)
+  }
+  path.closePath()
+}
+
+const createManifoldHoleCutter = (
+  Manifold: any,
+  hole: DrillHole,
+  options: Required<DrillGuideOptions>,
+) => {
+  const depth = options.baseThicknessMm + 2
+  const segments = options.holeSegments
+  const width = hole.widthMm ?? hole.diameterMm
+  const height = hole.heightMm ?? hole.diameterMm
+  const shape = hole.holeShape ?? "circle"
+  const rotationDeg = hole.rotationDeg ?? 0
+  let cutter: any
+
+  if (shape === "circle" || Math.abs(width - height) < 1e-9) {
+    cutter = Manifold.cylinder(
+      depth,
+      hole.diameterMm / 2,
+      hole.diameterMm / 2,
+      segments,
+      true,
+    )
+  } else if (shape === "oval") {
+    cutter = Manifold.cylinder(depth, 1, 1, segments, true).scale([
+      width / 2,
+      height / 2,
+      1,
+    ])
+  } else if (shape === "rect") {
+    cutter = Manifold.cube([width, height, depth], true)
+  } else {
+    const isHorizontal = width >= height
+    const radius = Math.min(width, height) / 2
+    const span = Math.abs(width - height)
+    const rect = Manifold.cube(
+      isHorizontal ? [span, height, depth] : [width, span, depth],
+      true,
+    )
+    const capA = Manifold.cylinder(
+      depth,
+      radius,
+      radius,
+      segments,
+      true,
+    ).translate(isHorizontal ? -span / 2 : 0, isHorizontal ? 0 : -span / 2, 0)
+    const capB = Manifold.cylinder(
+      depth,
+      radius,
+      radius,
+      segments,
+      true,
+    ).translate(isHorizontal ? span / 2 : 0, isHorizontal ? 0 : span / 2, 0)
+    cutter = Manifold.union([rect, capA, capB])
+  }
+
+  if (rotationDeg !== 0) {
+    cutter = cutter.rotate(0, 0, rotationDeg)
+  }
+
+  return cutter.translate(hole.x, hole.y, options.baseThicknessMm / 2)
+}
+
 const isHoleInsideBase = (
   hole: DrillHole,
   options: Required<DrillGuideOptions>,
 ): boolean => {
-  const radius = hole.diameterMm / 2
+  const halfWidth = (hole.widthMm ?? hole.diameterMm) / 2
+  const halfHeight = (hole.heightMm ?? hole.diameterMm) / 2
+  const radius = Math.hypot(halfWidth, halfHeight)
   return (
     hole.x - radius >= -options.baseWidthMm / 2 &&
     hole.x + radius <= options.baseWidthMm / 2 &&
@@ -290,15 +539,7 @@ const createBaseGeometry = (
 
   for (const hole of holes) {
     const path = new Path()
-    path.absellipse(
-      hole.x,
-      hole.y,
-      hole.diameterMm / 2,
-      hole.diameterMm / 2,
-      0,
-      Math.PI * 2,
-      true,
-    )
+    appendHoleOutline(path, hole, options.holeSegments)
     shape.holes.push(path)
   }
 
