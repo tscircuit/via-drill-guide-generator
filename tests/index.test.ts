@@ -64,6 +64,32 @@ test("extracts drill holes from vias, pcb holes, and plated holes", () => {
   ])
 })
 
+test("uses hole offsets when extracting circular holes with rect pads", () => {
+  const holes = extractDrillHoles([
+    {
+      type: "pcb_plated_hole",
+      shape: "circular_hole_with_rect_pad",
+      pcb_plated_hole_id: "offset_hole_1",
+      x: 10,
+      y: 5,
+      hole_diameter: 1.2,
+      hole_offset_x: -1.5,
+      hole_offset_y: 2.25,
+      layers: ["top", "bottom"],
+    },
+  ])
+
+  expect(holes).toEqual([
+    {
+      id: "offset_hole_1",
+      type: "pcb_plated_hole",
+      x: 8.5,
+      y: 7.25,
+      diameterMm: 1.2,
+    },
+  ])
+})
+
 test("builds the requested base with four bottom pillars", () => {
   const guide = createDrillGuide([
     {

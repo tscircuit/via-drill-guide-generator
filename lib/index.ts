@@ -112,8 +112,8 @@ export const extractDrillHoles = (circuitJson: unknown[]): DrillHole[] => {
         readString(element.pcb_via_id) ??
         `${element.type}_${holes.length}`,
       type: element.type,
-      x,
-      y,
+      x: x + (readNumber(element.hole_offset_x) ?? 0),
+      y: y + (readNumber(element.hole_offset_y) ?? 0),
       diameterMm,
     })
   }
